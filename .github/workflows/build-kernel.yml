@@ -6,15 +6,26 @@ on:
     # worth changing per-run. Everything else lives in the config file selected
     # by `config`, so a fork can keep one profile per device.
     inputs:
-      config:
-        description: "Config file to build (path, relative to the repo root)"
-        required: false
-        default: "config.env"
-        type: string
+     config:
+      description: "Select the device to build"
+      required: true
+      default: "config.env"
+      type: choice
+      options:
+        - config.env
+        - config/dipper.env
+        - config/fajita.env
+  # "config" on the options below means "use whatever the config file says".
+  # It is the default so that running the form without touching anything
+  # reproduces exactly what your profile describes.
+  ksu_variant:
+    description: "KernelSU variant"
+    required: false
+    
       # "config" on the options below means "use whatever the config file says".
       # It is the default so that running the form without touching anything
       # reproduces exactly what your profile describes.
-      ksu_variant:
+     ksu_variant:
         description: "KernelSU variant"
         required: false
         default: "config"
