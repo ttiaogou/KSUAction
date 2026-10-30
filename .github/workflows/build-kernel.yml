@@ -1,7 +1,7 @@
 name: Build Kernel
 
 on:
-    workflow_dispatch:
+  workflow_dispatch:
     # GitHub allows at most 10 workflow_dispatch inputs, so these are the knobs
     # worth changing per-run. Everything else lives in the config file selected
     # by `config`, so a fork can keep one profile per device.
