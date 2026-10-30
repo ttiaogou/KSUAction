@@ -18,6 +18,10 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 CONFIG_FILE=${CONFIG_ENV:-config.env}
+if [ -f "$CONFIG_FILE" ]; then
+    info "Selected config file: $CONFIG_FILE"
+    info "Config SHA256: $(sha256sum "$CONFIG_FILE" | awk '{print $1}')"
+fi
 
 # --------------------------------------------------------------- defaults ---
 
