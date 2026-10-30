@@ -136,6 +136,19 @@ build_kernel() {
 	# shellcheck disable=SC2086
 	make -j"$(nproc --all)" CC=clang $args "${KERNEL_CONFIG}" \
 		|| die "defconfig generation failed"
+		group "Final SUSFS configuration"
+
+if [ -f "${OUT}/.config" ]; then
+    grep -E '^(CONFIG_KSU_SUSFS[A-Z_]*=|# CONFIG_KSU_SUSFS[A-Z_]* is not set)' \
+        "${OUT}/.config" || true
+
+    info "SUSFS enabled count: $(grep -cE '^CONFIG_KSU_SUSFS[A-Z_]*=y$' "${OUT}/.config" || true)"
+    info "SUSFS disabled count: $(grep -cE '^# CONFIG_KSU_SUSFS[A-Z_]* is not set$' "${OUT}/.config" || true)"
+else
+    warn "Final .config not found; cannot verify SUSFS options"
+fi
+
+endgroup
 
 	info "make ${args}"
 	# shellcheck disable=SC2086
