@@ -1,31 +1,25 @@
 name: Build Kernel
 
 on:
-  workflow_dispatch:
+    workflow_dispatch:
     # GitHub allows at most 10 workflow_dispatch inputs, so these are the knobs
     # worth changing per-run. Everything else lives in the config file selected
     # by `config`, so a fork can keep one profile per device.
     inputs:
-     config:
-      description: "Select the device to build"
-      required: true
-      default: "config.env"
-      type: choice
-      options:
-        - config.env
-        - config/dipper.env
-        - config/fajita.env
-  # "config" on the options below means "use whatever the config file says".
-  # It is the default so that running the form without touching anything
-  # reproduces exactly what your profile describes.
-  ksu_variant:
-    description: "KernelSU variant"
-    required: false
-    
+      config:
+        description: "Select the device to build"
+        required: true
+        default: "config.env"
+        type: choice
+        options:
+          - config.env
+          - config/dipper.env
+          - config/fajita.env
+
       # "config" on the options below means "use whatever the config file says".
       # It is the default so that running the form without touching anything
       # reproduces exactly what your profile describes.
-     ksu_variant:
+      ksu_variant:
         description: "KernelSU variant"
         required: false
         default: "config"
@@ -39,46 +33,54 @@ on:
           - resukisu
           - rsuntk
           - backslashxx
+
       ksu_ref:
         description: "KernelSU branch/tag/commit (blank = best default for your kernel)"
         required: false
         default: ""
         type: string
+
       hook_mode:
         description: "Syscall hook mechanism"
         required: false
         default: "config"
         type: choice
         options: [config, auto, kprobes, manual, tracepoint, syscall, none]
+
       susfs:
         description: "Apply SUSFS (mount/root hiding)"
         required: false
         default: "config"
         type: choice
         options: [config, "true", "false"]
+
       path_umount:
         description: "Backport path_umount() (needed on kernels older than 5.9)"
         required: false
         default: "config"
         type: choice
         options: [config, "true", "false"]
+
       hide_stuff:
         description: "Apply hide_stuff (extra fingerprint removal)"
         required: false
         default: "config"
         type: choice
         options: [config, "true", "false"]
+
       kpm:
         description: "Enable KPM (SukiSU-Ultra only)"
         required: false
         default: "config"
         type: choice
         options: [config, "true", "false"]
+
       extra_defconfig:
         description: "Extra defconfig lines, space separated (e.g. CONFIG_TMPFS_XATTR=y)"
         required: false
         default: ""
         type: string
+
       publish_release:
         description: "Publish the build as a GitHub Release"
         required: false
