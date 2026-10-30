@@ -105,6 +105,9 @@ on:
       kpm:             { required: false, default: "config",     type: string }
       extra_defconfig: { required: false, default: "",           type: string }
       publish_release: { required: false, default: false,        type: boolean }
+      build_current: { required: false, default: false, type: boolean }
+      build_dipper:  { required: false, default: false, type: boolean }
+      build_fajita:  { required: false, default: false, type: boolean }
 
 # Only one build per ref at a time; a newer run supersedes an older one.
 concurrency:
