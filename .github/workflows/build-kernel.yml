@@ -6,7 +6,8 @@ on:
     # worth changing per-run. Everything else lives in the config file selected
     # by `config`, so a fork can keep one profile per device.
     inputs:
-            config:
+    inputs:
+      config:
         description: "Select the default build or Dipper + Fajita parallel build"
         required: true
         default: "config.env"
@@ -14,7 +15,6 @@ on:
         options:
           - config.env
           - config_dipper.env,config_fajita.env
-
       # "config" on the options below means "use whatever the config file says".
       # It is the default so that running the form without touching anything
       # reproduces exactly what your profile describes.
