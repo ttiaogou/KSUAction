@@ -204,7 +204,7 @@ apply_patch() {
 	local patch=$1 strip=${2:-1}
 	[ -f "$patch" ] || die "patch not found: ${patch}"
 	if patch -p"$strip" --dry-run --force --silent <"$patch" >/dev/null 2>&1; then
-		patch -p"$strip" --force --no-backup-if-mismatch <"$patch" >/dev/null
+		patch -p"$strip" --force --verbose --no-backup-if-mismatch <"$patch"
 		ok "applied $(basename "$patch")"
 		return 0
 	fi
