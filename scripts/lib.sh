@@ -218,7 +218,7 @@ apply_patch() {
 	# then run their fallback against a half-patched (and often uncompilable)
 	# source file.
 	if patch -p"$strip" --dry-run --force --fuzz=3 --silent <"$patch" >/dev/null 2>&1; then
-		patch -p"$strip" --force --fuzz=3 --no-backup-if-mismatch <"$patch" >/dev/null
+		patch -p"$strip" --force --fuzz=3 --verbose --no-backup-if-mismatch <"$patch"
 		warn "$(basename "$patch") applied with fuzz; verify the result"
 		return 0
 	fi
