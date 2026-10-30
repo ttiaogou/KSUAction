@@ -107,21 +107,22 @@ concurrency:
 permissions:
   contents: read
 
+
 jobs:
   build:
-    name: Build ${{ inputs.config }}
+    name: Build ${{ matrix.config }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    outputs:
-      device: ${{ steps.meta.outputs.device }}
-      build_time: ${{ steps.meta.outputs.build_time }}
-      ksu_name: ${{ steps.meta.outputs.ksu_name }}
-      ksu_version: ${{ steps.meta.outputs.ksu_version }}
-      kernel_release: ${{ steps.meta.outputs.kernel_release }}
-      susfs_version: ${{ steps.meta.outputs.susfs_version }}
+
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        config: ${{ fromJSON(inputs.config == 'config.env' && '["config.env"]' || inputs.config == 'config_dipper.env,config_fajita.env' && '["config_dipper.env","config_fajita.env"]' || format('["{0}"]', inputs.config)) }}
+
     env:
       WORKSPACE: ${{ github.workspace }}/kernel_workspace
-      CONFIG_ENV: ${{ inputs.config }}
+      CONFIG_ENV: ${{ matrix.config }}
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
@@ -203,18 +204,6 @@ jobs:
       - name: Package artifacts
         run: bash scripts/package.sh all
 
-      - name: Export build metadata
-        id: meta
-        run: |
-          {
-            echo "device=${DEVICE}"
-            echo "build_time=${BUILD_TIME}"
-            echo "ksu_name=${KSU_NAME:-none}"
-            echo "ksu_version=${KSU_VERSION_LABEL:-}"
-            echo "kernel_release=${KERNEL_RELEASE:-}"
-            echo "susfs_version=${SUSFS_VERSION:-}"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Upload kernel image
         uses: actions/upload-artifact@v4
         with:
@@ -243,8 +232,6 @@ jobs:
           name: boot${{ env.LOCALVERSION }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
           path: kernel_workspace/boot.img
 
-  # Publishing is a separate job so the build itself runs with a read-only
-  # token; only this job gets contents:write, and only when asked for.
   release:
     name: Publish release
     needs: build
@@ -252,6 +239,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -263,28 +251,39 @@ jobs:
         run: |
           mkdir -p release
           shopt -s nullglob
+
           for dir in artifacts/AnyKernel3*/; do
             name=$(basename "${dir%/}")
             (cd "$dir" && zip -qr9 "${GITHUB_WORKSPACE}/release/${name}.zip" .)
             echo "packed ${name}.zip"
           done
-          for f in artifacts/*/Image* artifacts/*/boot.img artifacts/*/dtbo.img; do
-            [ -f "$f" ] && cp "$f" release/
+
+          # Keep image filenames unique when multiple devices are downloaded.
+          for dir in artifacts/*/; do
+            [ -d "$dir" ] || continue
+            name=$(basename "${dir%/}")
+
+            case "$name" in
+              AnyKernel3*) continue ;;
+            esac
+
+            for f in "$dir"/Image* "$dir"/boot.img "$dir"/dtbo.img; do
+              [ -f "$f" ] || continue
+              cp "$f" "release/${name}-$(basename "$f")"
+            done
           done
+
           ls -la release/
 
       - name: Create release
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
-          tag_name: ${{ needs.build.outputs.device }}-${{ needs.build.outputs.build_time }}
-          name: ${{ needs.build.outputs.device }} · ${{ needs.build.outputs.ksu_name }} · ${{ needs.build.outputs.build_time }}
+          tag_name: kernel-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: "Kernel build #${{ github.run_number }} · ${{ inputs.config }}"
           body: |
-            | | |
-            | --- | --- |
-            | Device | `${{ needs.build.outputs.device }}` |
-            | Kernel | `${{ needs.build.outputs.kernel_release }}` |
-            | KernelSU | `${{ needs.build.outputs.ksu_name }}` @ `${{ needs.build.outputs.ksu_version }}` |
-            | SUSFS | `${{ needs.build.outputs.susfs_version || 'not applied' }}` |
+            Build selection: `${{ inputs.config }}`
 
-            Flash the AnyKernel3 zip from a custom recovery.
+            This release contains the AnyKernel3 ZIP artifacts produced by the selected build task(s).
+
+            Flash the appropriate AnyKernel3 ZIP from a custom recovery.
           files: release/*
