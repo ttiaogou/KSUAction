@@ -122,7 +122,6 @@ susfs_apply() {
 # Does the selected variant+ref already contain SUSFS?
 susfs_is_bundled() {
 	local bundled=${KSU_SUSFS_BUNDLED_REFS:--} ref=${KSU_REF_RESOLVED:-}
-	[ "$bundled" = "-" ] && return 1
 	local r
 	for r in $bundled; do
 		[ "$r" = "$ref" ] && return 0
