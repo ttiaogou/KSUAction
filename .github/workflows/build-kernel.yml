@@ -6,7 +6,6 @@ on:
     # worth changing per-run. Everything else lives in the config file selected
     # by `config`, so a fork can keep one profile per device.
     inputs:
-    inputs:
       config:
         description: "Select the default build or Dipper + Fajita parallel build"
         required: true
