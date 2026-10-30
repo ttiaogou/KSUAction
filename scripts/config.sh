@@ -28,6 +28,7 @@ declare -A DEFAULTS=(
 	[KERNEL_IMAGE_NAME]="Image.gz-dtb"
 	[ARCH]="arm64"
 	[KERNEL_NAME]=""
+	[PACKAGE_NAME]=""
 	[ADD_LOCALVERSION_TO_FILENAME]="false"
 	[EXTRA_CMDS]=""
 	[CUSTOM_CMDS]=""
@@ -244,6 +245,10 @@ validate
 DEVICE=$(printf '%s' "${CFG[KERNEL_CONFIG]}" | sed 's!.*/!!; s/_defconfig$//; s/_user$//; s/-perf$//')
 [ -n "${CFG[KERNEL_NAME]}" ] && DEVICE=${CFG[KERNEL_NAME]}
 CFG[DEVICE]=$DEVICE
+
+PACKAGE_NAME=${CFG[PACKAGE_NAME]}
+[ -n "$PACKAGE_NAME" ] || PACKAGE_NAME="$DEVICE"
+CFG[PACKAGE_NAME]=$PACKAGE_NAME
 
 summary "### Build configuration"
 summary ""
