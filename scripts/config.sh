@@ -63,13 +63,13 @@ declare -A DEFAULTS=(
 	[KSU_EXPECTED_HASH]=""
 
 	# Patches
-    [ENABLE_SUSFS]="false"
-    [APPLY_SUSFS_KERNEL_PATCH]="true"
-    [SUSFS_REPO]="https://gitlab.com/simonpunk/susfs4ksu.git"
-    [SUSFS_BRANCH]="auto"
-    [ENABLE_PATH_UMOUNT]="false"
-    [ENABLE_HIDE_STUFF]="false"
-    [ENABLE_KPM]="false"
+	[ENABLE_SUSFS]="false"
+	[APPLY_SUSFS_KERNEL_PATCH]="true"
+	[SUSFS_REPO]="https://gitlab.com/simonpunk/susfs4ksu.git"
+	[SUSFS_BRANCH]="auto"
+	[ENABLE_PATH_UMOUNT]="false"
+	[ENABLE_HIDE_STUFF]="false"
+	[ENABLE_KPM]="false"
 
 	# Kconfig tweaks
 	[ADD_KPROBES_CONFIG]="false"
