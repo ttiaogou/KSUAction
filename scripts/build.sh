@@ -16,6 +16,72 @@ OUT="${KERNEL_DIR}/out"
 
 DEFCONFIG_PATH="${KERNEL_DIR}/arch/${ARCH}/configs/${KERNEL_CONFIG}"
 
+# ------------------------------------------------------- version suffix ---
+# Disable only the Git dirty marker emitted by this kernel's setlocalversion.
+# The check is source-aware and idempotent: unknown layouts fail closed.
+disable_git_dirty_suffix() {
+	local version_script="${KERNEL_DIR}/scripts/setlocalversion"
+	[ -f "$version_script" ] || die "scripts/setlocalversion not found: ${version_script}"
+
+	local start_count end_count git_block dirty_count disabled_count tmp
+
+	start_count=$(grep -Fc '# Check for uncommitted changes.' "$version_script" || true)
+	end_count=$(grep -Fc '# All done with git' "$version_script" || true)
+
+	[ "$start_count" -eq 1 ] && [ "$end_count" -eq 1 ] \
+		|| die "unsupported setlocalversion layout: cannot identify one Git dirty-check block"
+
+	git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$version_script")
+	[ -n "$git_block" ] || die "Git dirty-check block is empty in ${version_script}"
+
+	dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
+	disabled_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*:[[:space:]]*$' || true)
+
+	if [ "$dirty_count" -eq 1 ] && [ "$disabled_count" -eq 0 ]; then
+		tmp=$(mktemp "${version_script}.ksuaction.XXXXXX") \
+			|| die "cannot create temporary file beside ${version_script}"
+
+		if ! awk '
+			/# Check for uncommitted changes\./ { in_git = 1 }
+			in_git && /^[[:space:]]*printf/ && /-dirty/ {
+				sub(/printf.*/, ":")
+				changed++
+			}
+			{ print }
+			/^[[:space:]]*# All done with git/ { in_git = 0 }
+			END { if (changed != 1) exit 1 }
+		' "$version_script" > "$tmp"; then
+			rm -f "$tmp"
+			die "could not uniquely disable Git dirty output in ${version_script}"
+		fi
+
+		chmod --reference="$version_script" "$tmp" || {
+			rm -f "$tmp"
+			die "could not preserve permissions for ${version_script}"
+		}
+
+		mv "$tmp" "$version_script" || {
+			rm -f "$tmp"
+			die "could not update ${version_script}"
+		}
+
+	elif [ "$dirty_count" -eq 0 ] && [ "$disabled_count" -eq 1 ]; then
+		info "Git dirty suffix is already disabled"
+	else
+		die "unexpected Git dirty-check contents in ${version_script} (dirty lines: ${dirty_count}, disabled lines: ${disabled_count})"
+	fi
+
+	git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$version_script")
+
+	dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
+	disabled_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*:[[:space:]]*$' || true)
+
+	[ "$dirty_count" -eq 0 ] && [ "$disabled_count" -eq 1 ] \
+		|| die "Git dirty suffix verification failed for ${version_script}"
+
+	ok "Git -dirty suffix disabled in scripts/setlocalversion"
+}
+
 # ------------------------------------------------------------- defconfig ---
 
 prepare_defconfig() {
@@ -75,14 +141,13 @@ prepare_defconfig() {
 		done
 	fi
 
-	# A stable LOCALVERSION keeps artifact names predictable. Without this the
-	# tree appends "-dirty" as soon as any patch above touches a tracked file.
+	# Keep the optional device label independent from Git version suffix handling.
 	if [ -n "${KERNEL_NAME:-}" ]; then
 		kconf_set "$DEFCONFIG_PATH" CONFIG_LOCALVERSION "\"-${KERNEL_NAME}\""
-		if [ -f "${KERNEL_DIR}/scripts/setlocalversion" ]; then
-			sed -i 's/echo "\$res"/echo "\$res"/; s/-dirty//g' "${KERNEL_DIR}/scripts/setlocalversion"
-		fi
 	fi
+
+	# Apply to every device profile, whether or not KERNEL_NAME is configured.
+	disable_git_dirty_suffix
 
 	info "defconfig changes:"
 	diff -u "${WORKSPACE}/defconfig.orig" "$DEFCONFIG_PATH" | sed -n '4,$p' | sed 's/^/    /' || true
