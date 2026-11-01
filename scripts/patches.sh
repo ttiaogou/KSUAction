@@ -55,9 +55,8 @@ susfs_apply() {
 	fi
 
 	
-local kp=""
-
-if is_true "${APPLY_SUSFS_KERNEL_PATCH:-true}"; then
+    local kp=""
+    if is_true "${APPLY_SUSFS_KERNEL_PATCH:-true}"; then
     info "Applying SUSFS kernel sources and main patch"
 
     ref_exists "$repo" "$branch" \
@@ -115,9 +114,6 @@ else
         || die "SUSFS cmdline spoof adaptation is missing"
 fi
 
-       This usually means SUSFS_BRANCH does not match your kernel. Detected
-       kernel ${kver}, used branch '${branch}'."
-
 	# 3. Patch the KernelSU side -- but only when the variant does not already
 	#    ship SUSFS support. SukiSU-Ultra's 'builtin' branch, for instance,
 	#    declares CONFIG_KSU_SUSFS itself; applying the patch on top conflicts.
@@ -154,7 +150,6 @@ fi
 
 # Does the selected variant+ref already contain SUSFS?
 
-# Does the selected variant+ref already contain SUSFS?
 susfs_is_bundled() {
     local bundled=${KSU_SUSFS_BUNDLED_REFS:--}
     local ref=${KSU_REF_RESOLVED:-}
