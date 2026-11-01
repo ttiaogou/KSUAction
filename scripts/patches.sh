@@ -54,65 +54,65 @@ susfs_apply() {
 		info "kernel ${kver} -> susfs branch '${branch}'"
 	fi
 
-	
-    local kp=""
-    if is_true "${APPLY_SUSFS_KERNEL_PATCH:-true}"; then
-    info "Applying SUSFS kernel sources and main patch"
+	local kp=""
 
-    ref_exists "$repo" "$branch" \
-        || die "susfs4ksu has no branch '${branch}'."
+	if is_true "${APPLY_SUSFS_KERNEL_PATCH:-true}"; then
+		info "Applying SUSFS kernel sources and main patch"
 
-    local susfs_dir="${WORKSPACE}/susfs4ksu"
-    rm -rf "$susfs_dir"
+		ref_exists "$repo" "$branch" \
+			|| die "susfs4ksu has no branch '${branch}'."
 
-    retry 3 git clone -q --depth=1 -b "$branch" "$repo" "$susfs_dir" \
-        || die "failed to clone ${repo} @ ${branch}"
+		local susfs_dir="${WORKSPACE}/susfs4ksu"
+		rm -rf "$susfs_dir"
 
-    kp="${susfs_dir}/kernel_patches"
-    [ -d "$kp" ] || die "unexpected susfs4ksu layout: ${kp} missing"
+		retry 3 git clone -q --depth=1 -b "$branch" "$repo" "$susfs_dir" \
+			|| die "failed to clone ${repo} @ ${branch}"
 
-    # 1. Copy SUSFS core source files.
-    info "copying SUSFS sources into the kernel tree"
-    cp -v "${kp}/fs/"*.c "${KERNEL_DIR}/fs/" 2>/dev/null || true
-    cp -v "${kp}/include/linux/"*.h "${KERNEL_DIR}/include/linux/" 2>/dev/null || true
+		kp="${susfs_dir}/kernel_patches"
+		[ -d "$kp" ] || die "unexpected susfs4ksu layout: ${kp} missing"
 
-    # 2. Apply SUSFS kernel main patch.
-    local kernel_patch="${kp}/50_add_susfs_in_${branch}.patch"
+		# 1. Copy SUSFS core source files.
+		info "copying SUSFS sources into the kernel tree"
+		cp -v "${kp}/fs/"*.c "${KERNEL_DIR}/fs/" 2>/dev/null || true
+		cp -v "${kp}/include/linux/"*.h "${KERNEL_DIR}/include/linux/" 2>/dev/null || true
 
-    [ -f "$kernel_patch" ] || {
-        kernel_patch=$(find "$kp" -maxdepth 1 -name '50_add_susfs_in_*.patch' | head -n1)
-    }
+		# 2. Apply SUSFS kernel main patch.
+		local kernel_patch="${kp}/50_add_susfs_in_${branch}.patch"
 
-    [ -n "$kernel_patch" ] && [ -f "$kernel_patch" ] \
-        || die "no 50_add_susfs_in_*.patch found in ${kp}"
+		[ -f "$kernel_patch" ] || {
+			kernel_patch=$(find "$kp" -maxdepth 1 -name '50_add_susfs_in_*.patch' | head -n1)
+		}
 
-    ( cd "$KERNEL_DIR" && apply_patch "$kernel_patch" 1 ) \
-        || die "the SUSFS kernel patch did not apply cleanly.
+		[ -n "$kernel_patch" ] && [ -f "$kernel_patch" ] \
+			|| die "no 50_add_susfs_in_*.patch found in ${kp}"
+
+		( cd "$KERNEL_DIR" && apply_patch "$kernel_patch" 1 ) \
+			|| die "the SUSFS kernel patch did not apply cleanly.
        This usually means SUSFS_BRANCH does not match your kernel. Detected
        kernel ${kver}, used branch '${branch}'."
 
-else
-    # SUSFS is already integrated in the selected kernel source branch.
-    info "Using pre-integrated SUSFS kernel sources"
-    info "Skipping SUSFS source copy and 50_* kernel patch"
+	else
+		# SUSFS is already integrated in the selected kernel source branch.
+		info "Using pre-integrated SUSFS kernel sources"
+		info "Skipping SUSFS source copy and 50_* kernel patch"
 
-    for file in \
-        fs/susfs.c \
-        include/linux/susfs.h \
-        include/linux/susfs_def.h
-    do
-        [ -f "${KERNEL_DIR}/${file}" ] \
-            || die "pre-integrated SUSFS file missing: ${file}"
-    done
+		for file in \
+			fs/susfs.c \
+			include/linux/susfs.h \
+			include/linux/susfs_def.h
+		do
+			[ -f "${KERNEL_DIR}/${file}" ] \
+				|| die "pre-integrated SUSFS file missing: ${file}"
+		done
 
-    grep -qE '^[[:space:]]*obj-\$\(CONFIG_KSU_SUSFS\)[[:space:]]*\+=[[:space:]]*susfs\.o([[:space:]]|$)' \
-        "${KERNEL_DIR}/fs/Makefile" \
-        || die "fs/Makefile is not configured to build susfs.o"
+		grep -qE '^[[:space:]]*obj-\$\(CONFIG_KSU_SUSFS\)[[:space:]]*\+=[[:space:]]*susfs\.o([[:space:]]|$)' \
+			"${KERNEL_DIR}/fs/Makefile" \
+			|| die "fs/Makefile is not configured to build susfs.o"
 
-    grep -q 'susfs_spoof_cmdline_or_bootconfig' \
-        "${KERNEL_DIR}/fs/proc/cmdline.c" \
-        || die "SUSFS cmdline spoof adaptation is missing"
-fi
+		grep -q 'susfs_spoof_cmdline_or_bootconfig' \
+			"${KERNEL_DIR}/fs/proc/cmdline.c" \
+			|| die "SUSFS cmdline spoof adaptation is missing"
+	fi
 
 	# 3. Patch the KernelSU side -- but only when the variant does not already
 	#    ship SUSFS support. SukiSU-Ultra's 'builtin' branch, for instance,
