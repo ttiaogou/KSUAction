@@ -54,34 +54,67 @@ susfs_apply() {
 		info "kernel ${kver} -> susfs branch '${branch}'"
 	fi
 
-	ref_exists "$repo" "$branch" \
-		|| die "susfs4ksu has no branch '${branch}'.
-       Available: $(git ls-remote --heads "$repo" | awk '{print $2}' | sed 's@refs/heads/@@' | tr '\n' ' ')"
+	
+local kp=""
 
-	local susfs_dir="${WORKSPACE}/susfs4ksu"
-	rm -rf "$susfs_dir"
-	retry 3 git clone -q --depth=1 -b "$branch" "$repo" "$susfs_dir" \
-		|| die "failed to clone ${repo} @ ${branch}"
+if is_true "${APPLY_SUSFS_KERNEL_PATCH:-true}"; then
+    info "Applying SUSFS kernel sources and main patch"
 
-	local kp="${susfs_dir}/kernel_patches"
-	[ -d "$kp" ] || die "unexpected susfs4ksu layout: ${kp} missing"
+    ref_exists "$repo" "$branch" \
+        || die "susfs4ksu has no branch '${branch}'."
 
-	# 1. Drop in the SUSFS sources. The non-GKI branches carry sus_su.c too.
-	info "copying SUSFS sources into the kernel tree"
-	cp -v "${kp}/fs/"*.c              "${KERNEL_DIR}/fs/"            2>/dev/null || true
-	cp -v "${kp}/include/linux/"*.h   "${KERNEL_DIR}/include/linux/" 2>/dev/null || true
+    local susfs_dir="${WORKSPACE}/susfs4ksu"
+    rm -rf "$susfs_dir"
 
-	# 2. Patch the kernel itself.
-	local kernel_patch="${kp}/50_add_susfs_in_${branch}.patch"
-	[ -f "$kernel_patch" ] || {
-		# Fall back to whatever 50_* patch the branch actually ships.
-		kernel_patch=$(find "$kp" -maxdepth 1 -name '50_add_susfs_in_*.patch' | head -n1)
-	}
-	[ -n "$kernel_patch" ] && [ -f "$kernel_patch" ] \
-		|| die "no 50_add_susfs_in_*.patch found in ${kp}"
+    retry 3 git clone -q --depth=1 -b "$branch" "$repo" "$susfs_dir" \
+        || die "failed to clone ${repo} @ ${branch}"
 
-	( cd "$KERNEL_DIR" && apply_patch "$kernel_patch" 1 ) \
-		|| die "the SUSFS kernel patch did not apply cleanly.
+    kp="${susfs_dir}/kernel_patches"
+    [ -d "$kp" ] || die "unexpected susfs4ksu layout: ${kp} missing"
+
+    # 1. Copy SUSFS core source files.
+    info "copying SUSFS sources into the kernel tree"
+    cp -v "${kp}/fs/"*.c "${KERNEL_DIR}/fs/" 2>/dev/null || true
+    cp -v "${kp}/include/linux/"*.h "${KERNEL_DIR}/include/linux/" 2>/dev/null || true
+
+    # 2. Apply SUSFS kernel main patch.
+    local kernel_patch="${kp}/50_add_susfs_in_${branch}.patch"
+
+    [ -f "$kernel_patch" ] || {
+        kernel_patch=$(find "$kp" -maxdepth 1 -name '50_add_susfs_in_*.patch' | head -n1)
+    }
+
+    [ -n "$kernel_patch" ] && [ -f "$kernel_patch" ] \
+        || die "no 50_add_susfs_in_*.patch found in ${kp}"
+
+    ( cd "$KERNEL_DIR" && apply_patch "$kernel_patch" 1 ) \
+        || die "the SUSFS kernel patch did not apply cleanly.
+       This usually means SUSFS_BRANCH does not match your kernel. Detected
+       kernel ${kver}, used branch '${branch}'."
+
+else
+    # SUSFS is already integrated in the selected kernel source branch.
+    info "Using pre-integrated SUSFS kernel sources"
+    info "Skipping SUSFS source copy and 50_* kernel patch"
+
+    for file in \
+        fs/susfs.c \
+        include/linux/susfs.h \
+        include/linux/susfs_def.h
+    do
+        [ -f "${KERNEL_DIR}/${file}" ] \
+            || die "pre-integrated SUSFS file missing: ${file}"
+    done
+
+    grep -qE '^[[:space:]]*obj-\$\(CONFIG_KSU_SUSFS\)[[:space:]]*\+=[[:space:]]*susfs\.o([[:space:]]|$)' \
+        "${KERNEL_DIR}/fs/Makefile" \
+        || die "fs/Makefile is not configured to build susfs.o"
+
+    grep -q 'susfs_spoof_cmdline_or_bootconfig' \
+        "${KERNEL_DIR}/fs/proc/cmdline.c" \
+        || die "SUSFS cmdline spoof adaptation is missing"
+fi
+
        This usually means SUSFS_BRANCH does not match your kernel. Detected
        kernel ${kver}, used branch '${branch}'."
 
@@ -120,17 +153,29 @@ susfs_apply() {
 }
 
 # Does the selected variant+ref already contain SUSFS?
+
+# Does the selected variant+ref already contain SUSFS?
 susfs_is_bundled() {
-	local bundled=${KSU_SUSFS_BUNDLED_REFS:--} ref=${KSU_REF_RESOLVED:-}
-	[ "$bundled" = "-" ] && return 1
-	local r
-	for r in $bundled; do
-		[ "$r" = "$ref" ] && return 0
-	done
-	# Fall back to inspecting the tree, which is authoritative.
-	local ksu_dir="${KERNEL_DIR}/${KSU_DIR:-KernelSU}"
-	[ -d "$ksu_dir" ] && grep -rqs 'CONFIG_KSU_SUSFS\|config KSU_SUSFS' "${ksu_dir}/kernel/Kconfig" 2>/dev/null
+    local bundled=${KSU_SUSFS_BUNDLED_REFS:--}
+    local ref=${KSU_REF_RESOLVED:-}
+
+    # First check known bundled refs.
+    if [ "$bundled" != "-" ] && [ -n "$ref" ]; then
+        local r
+        for r in $bundled; do
+            [ "$r" = "$ref" ] && return 0
+        done
+    fi
+
+    # Fall back to the actual KernelSU Kconfig.
+    local ksu_dir="${KERNEL_DIR}/${KSU_DIR:-KernelSU}"
+    local ksu_kconfig="${ksu_dir}/kernel/Kconfig"
+
+    [ -f "$ksu_kconfig" ] \
+        && grep -qE '^[[:space:]]*config[[:space:]]+KSU_SUSFS([[:space:]]|$)' \
+            "$ksu_kconfig"
 }
+
 
 susfs_defconfig() {
 	local defconfig=$1
