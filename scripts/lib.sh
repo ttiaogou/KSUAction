@@ -261,7 +261,7 @@ ref_exists() {
 	return 1
 }
 
-# ------------------------------------------------------------ Kconfig I/O ---
+# ------------------------------------------------------------- Kconfig I/O ---
 #
 # The original workflow manipulated defconfigs with a pile of one-off `sed`
 # expressions, which double-set options and cannot represent "turn this off".
