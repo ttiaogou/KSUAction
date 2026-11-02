@@ -86,6 +86,7 @@ disable_git_dirty_suffix() {
 
 prepare_defconfig() {
 	group "Preparing defconfig"
+	write_version_diagnostic "STARTED" "Kernel version preflight pending"
 	[ -f "$DEFCONFIG_PATH" ] \
 		|| die "defconfig not found: arch/${ARCH}/configs/${KERNEL_CONFIG}
        Available: $(ls "${KERNEL_DIR}/arch/${ARCH}/configs/" | head -20 | tr '\n' ' ')"
@@ -146,13 +147,155 @@ prepare_defconfig() {
 		kconf_set "$DEFCONFIG_PATH" CONFIG_LOCALVERSION "\"-${KERNEL_NAME}\""
 	fi
 
-	# Apply to every device profile, whether or not KERNEL_NAME is configured.
-	disable_git_dirty_suffix
+	# Restore the real Git dirty detection instead of suppressing it.
+restore_git_dirty_detection
 
 	info "defconfig changes:"
 	diff -u "${WORKSPACE}/defconfig.orig" "$DEFCONFIG_PATH" | sed -n '4,$p' | sed 's/^/    /' || true
 	endgroup
 }
+
+
+# ------------------------------------------------------ source snapshot ---
+
+create_local_source_snapshot() {
+    group "Creating local kernel source snapshot"
+
+    local base_head snapshot ksu_dir path tracked_status
+
+    base_head=$(git -C "$KERNEL_DIR" rev-parse HEAD 2>/dev/null) || {
+        write_version_diagnostic "FAILED" "Cannot read kernel HEAD"
+        die "kernel Git HEAD is unavailable"
+    }
+
+    export_env KERNEL_SOURCE_BASE_COMMIT "$base_head"
+
+    # Remove only an untracked generated SCM cache.
+    # A tracked .scmversion is preserved and verified later.
+    if [ -f "${KERNEL_DIR}/.scmversion" ] &&
+       ! git -C "$KERNEL_DIR" ls-files --error-unmatch -- .scmversion >/dev/null 2>&1; then
+        info "Removing stale generated .scmversion"
+        rm -f "${KERNEL_DIR}/.scmversion"
+    fi
+
+    # Stage modifications to files already tracked by the kernel repository.
+    # Do not use git add -A: KernelSU is an independent nested repository.
+    git -C "$KERNEL_DIR" add -u -- . || {
+        write_version_diagnostic "FAILED" "Cannot stage tracked source changes"
+        die "failed to stage kernel source changes"
+    }
+
+    # Explicitly include the SUSFS core files when they are newly copied
+    # into a clean kernel source tree.
+    for path in \
+        fs/susfs.c \
+        include/linux/susfs.h \
+        include/linux/susfs_def.h
+    do
+        if [ -f "${KERNEL_DIR}/${path}" ]; then
+            git -C "$KERNEL_DIR" add -- "$path" || {
+                write_version_diagnostic "FAILED" "Cannot stage ${path}"
+                die "failed to stage SUSFS source file: ${path}"
+            }
+        fi
+    done
+
+    # The selected KernelSU tree is an independent Git repository.
+    # Keep it separate and record its commit in the diagnostic report.
+    ksu_dir=${KSU_DIR:-KernelSU}
+
+    while IFS= read -r path; do
+        case "$path" in
+            "$ksu_dir" | "$ksu_dir/"*)
+                ;;
+            *)
+                write_version_diagnostic "FAILED" "Unexpected untracked kernel path: ${path}"
+                die "unexpected untracked source file: ${path}"
+                ;;
+        esac
+    done < <(git -C "$KERNEL_DIR" ls-files --others --exclude-standard)
+
+    # Create a local-only commit if the integration changed the source tree.
+    if ! git -C "$KERNEL_DIR" diff --cached --quiet; then
+        git -C "$KERNEL_DIR" \
+            -c user.name="KSUAction CI" \
+            -c user.email="ksuaction-ci@localhost" \
+            commit --no-gpg-sign \
+            -m "KSUAction: snapshot integrated kernel sources" || {
+                write_version_diagnostic "FAILED" "Local source snapshot commit failed"
+                die "failed to create local kernel source snapshot"
+            }
+    fi
+
+    tracked_status=$(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no)
+
+    if [ -n "$tracked_status" ]; then
+        write_version_diagnostic "FAILED" "Tracked kernel files remain modified after snapshot"
+        die "kernel tracked working tree is not clean after snapshot"
+    fi
+
+    snapshot=$(git -C "$KERNEL_DIR" rev-parse HEAD)
+
+    export_env KERNEL_SOURCE_BUILD_COMMIT "$snapshot"
+
+    write_version_diagnostic "SNAPSHOT_READY" "none" "not-calculated"
+
+    ok "Original kernel commit: ${base_head}"
+    ok "Local build snapshot: ${snapshot}"
+    ok "Tracked kernel working tree is clean"
+
+    summary "| Original kernel commit | \`${base_head}\` |"
+    summary "| Local build snapshot | \`${snapshot}\` |"
+
+    endgroup
+}
+
+
+# ------------------------------------------------------ release verification ---
+
+verify_kernel_release() {
+    group "Verifying kernel release"
+
+    local release log_file tracked_status
+
+    log_file="${WORKSPACE}/kernelrelease-check.log"
+
+    if ! release=$(make -s O=out ARCH="${ARCH}" kernelrelease 2>"${log_file}"); then
+        write_version_diagnostic "FAILED" \
+            "make kernelrelease failed: $(cat "$log_file")"
+        die "cannot calculate kernel release"
+    fi
+
+    release=$(printf '%s\n' "$release" | tail -n1)
+
+    info "Calculated kernel release: ${release}"
+
+    if [[ "$release" == *-dirty* ]]; then
+        write_version_diagnostic "FAILED" \
+            "Unexpected -dirty suffix detected" "$release"
+
+        die "kernel release contains -dirty; diagnostic report generated"
+    fi
+
+    tracked_status=$(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no)
+
+    if [ -n "$tracked_status" ]; then
+        write_version_diagnostic "FAILED" \
+            "Tracked source changed after snapshot" "$release"
+
+        die "kernel source changed after local snapshot"
+    fi
+
+    export_env KERNEL_RELEASE "$release"
+
+    write_version_diagnostic "PREBUILD_PASS" "none" "$release"
+
+    ok "Kernel release verified: ${release}"
+    summary "| Pre-build kernel release | \`${release}\` |"
+
+    endgroup
+}
+
 
 # ----------------------------------------------------------------- build ---
 
@@ -196,11 +339,18 @@ build_kernel() {
 		info "ccache enabled (dir: ${CCACHE_DIR})"
 	fi
 
-	cd "$KERNEL_DIR"
-	info "make ${args} ${KERNEL_CONFIG}"
-	# shellcheck disable=SC2086
-	make -j"$(nproc --all)" CC=clang $args "${KERNEL_CONFIG}" \
-		|| die "defconfig generation failed"
+cd "$KERNEL_DIR"
+
+# Snapshot all source integration changes before Kbuild starts.
+create_local_source_snapshot
+
+info "make ${args} ${KERNEL_CONFIG}"
+
+make -j"$(nproc --all)" CC=clang $args "${KERNEL_CONFIG}" \
+    || die "defconfig generation failed"
+
+# Calculate and verify the actual kernel release before compilation.
+verify_kernel_release
 	group "Final SUSFS configuration"
 
 	if [ -f "${OUT}/.config" ]; then
@@ -249,14 +399,34 @@ check_output() {
 		kpm_patch_image "$image"
 	fi
 
-	# Record the version string the kernel actually reports.
-	if [ -f "${OUT}/include/generated/utsrelease.h" ]; then
-		local rel
-		rel=$(sed -nE 's/.*UTS_RELEASE[[:space:]]+"([^"]+)".*/\1/p' "${OUT}/include/generated/utsrelease.h")
-		export_env KERNEL_RELEASE "$rel"
-		ok "kernel release: ${rel}"
-		summary "| Kernel release | \`${rel}\` |"
-	fi
+	# Record and verify the release string actually compiled into the kernel.
+if [ -f "${OUT}/include/generated/utsrelease.h" ]; then
+    local rel
+
+    rel=$(sed -nE 's/.*UTS_RELEASE[[:space:]]+"([^"]+)".*/\1/p' \
+        "${OUT}/include/generated/utsrelease.h")
+
+    if [[ "$rel" == *-dirty* ]]; then
+        write_version_diagnostic "FAILED" \
+            "Final UTS_RELEASE contains -dirty" "$rel"
+
+        die "compiled kernel contains unexpected -dirty suffix"
+    fi
+
+    if [ -n "${KERNEL_RELEASE:-}" ] && [ "$rel" != "$KERNEL_RELEASE" ]; then
+        write_version_diagnostic "FAILED" \
+            "Pre-build and final kernel release mismatch" "$rel"
+
+        die "final kernel release differs from pre-build verification"
+    fi
+
+    export_env KERNEL_RELEASE "$rel"
+
+    write_version_diagnostic "PASS" "none" "$rel"
+
+    ok "kernel release: ${rel}"
+    summary "| Kernel release | \`${rel}\` |"
+fi
 	endgroup
 }
 
