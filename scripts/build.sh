@@ -378,11 +378,14 @@ create_local_source_snapshot() {
 verify_kernel_release() {
     group "Verifying kernel release"
 
-    local release log_file tracked_status
+    local release log_file tracked_status args
 
     log_file="${WORKSPACE}/kernelrelease-check.log"
 
-    if ! release=$(make -s O=out ARCH="${ARCH}" kernelrelease 2>"${log_file}"); then
+    args=$(make_args)
+
+    # shellcheck disable=SC2086
+    if ! release=$(make -s CC=clang $args kernelrelease 2>"${log_file}"); then
         write_version_diagnostic "FAILED" \
             "make kernelrelease failed: $(cat "$log_file")"
         die "cannot calculate kernel release"
