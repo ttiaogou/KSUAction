@@ -105,92 +105,77 @@ write_version_diagnostic() {
     } > "$VERSION_DIAGNOSTIC"
 }
 
-# Restore the real Git dirty marker.
-# Only the known incorrect placeholder ':' is repaired automatically.
+# Restore the standard Git dirty marker without a separate placeholder-count check.
 restore_git_dirty_detection() {
-    local version_script="${KERNEL_DIR}/scripts/setlocalversion"
-    local start_count end_count git_block
-    local dirty_count colon_count tmp
+	local version_script="${KERNEL_DIR}/scripts/setlocalversion"
+	local start_count end_count git_block dirty_count tmp
 
-    [ -f "$version_script" ] || {
-        write_version_diagnostic "FAILED" "setlocalversion missing"
-        die "scripts/setlocalversion not found"
-    }
+	[ -f "$version_script" ] || {
+		write_version_diagnostic "FAILED" "setlocalversion missing"
+		die "scripts/setlocalversion not found"
+	}
 
-    start_count=$(grep -Fc '# Check for uncommitted changes.' "$version_script" || true)
-    end_count=$(grep -Fc '# All done with git' "$version_script" || true)
+	start_count=$(grep -Fc '# Check for uncommitted changes.' "$version_script" || true)
+	end_count=$(grep -Fc '# All done with git' "$version_script" || true)
 
-    if [ "$start_count" -ne 1 ] || [ "$end_count" -ne 1 ]; then
-        write_version_diagnostic "FAILED" "Unknown setlocalversion layout"
-        die "unsupported setlocalversion layout"
-    fi
+	if [ "$start_count" -ne 1 ] || [ "$end_count" -ne 1 ]; then
+		write_version_diagnostic "FAILED" "Unknown setlocalversion layout"
+		die "unsupported setlocalversion layout"
+	fi
 
-    git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$version_script")
+	# Restore the known Git dirty-check block in place. If the standard marker
+	# is already present, this leaves the file unchanged.
+	tmp=$(mktemp "${version_script}.ksuaction.XXXXXX") || {
+		write_version_diagnostic "FAILED" "Cannot create temporary setlocalversion"
+		die "cannot create temporary version script"
+	}
 
-    dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
-    colon_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*:[[:space:]]*$' || true)
+	if ! awk '
+		/# Check for uncommitted changes\./ { in_git = 1 }
+		in_git && /^[[:space:]]*:[[:space:]]*$/ {
+			indent = $0
+			sub(/[^[:space:]].*$/, "", indent)
+			print indent "printf '\''%s'\'' -dirty"
+			next
+		}
+		{ print }
+		/^[[:space:]]*# All done with git/ { in_git = 0 }
+	' "$version_script" > "$tmp"; then
+		rm -f "$tmp"
+		write_version_diagnostic "FAILED" "Cannot restore Git dirty marker"
+		die "failed to restore Git dirty detection"
+	fi
 
-    if [ "$dirty_count" -eq 1 ] && [ "$colon_count" -eq 0 ]; then
-        info "Git dirty detection is already enabled"
+	git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$tmp")
+	dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
 
-    elif [ "$dirty_count" -eq 0 ] && [ "$colon_count" -eq 1 ]; then
-        info "Found disabled Git dirty detection; restoring it"
+	if [ "$dirty_count" -ne 1 ]; then
+		rm -f "$tmp"
+		write_version_diagnostic "FAILED" "Git dirty marker verification failed: printf=${dirty_count}"
+		die "Git dirty detection restoration verification failed"
+	fi
 
-        tmp=$(mktemp "${version_script}.ksuaction.XXXXXX") || {
-            write_version_diagnostic "FAILED" "Cannot create temporary setlocalversion"
-            die "cannot create temporary version script"
-        }
+	if ! cmp -s "$version_script" "$tmp"; then
+		chmod --reference="$version_script" "$tmp" || {
+			rm -f "$tmp"
+			write_version_diagnostic "FAILED" "Cannot preserve script permissions"
+			die "cannot preserve setlocalversion permissions"
+		}
 
-        if ! awk '
-            /# Check for uncommitted changes\./ { in_git = 1 }
-            in_git && /^[[:space:]]*:[[:space:]]*$/ {
-                indent = $0
-                sub(/[^[:space:]].*$/, "", indent)
-                print indent "printf '\''%s'\'' -dirty"
-                changed++
-                next
-            }
-            { print }
-            /^[[:space:]]*# All done with git/ { in_git = 0 }
-            END { if (changed != 1) exit 1 }
-        ' "$version_script" > "$tmp"; then
-            rm -f "$tmp"
-            write_version_diagnostic "FAILED" "Cannot restore Git dirty marker"
-            die "failed to restore Git dirty detection"
-        fi
+		mv "$tmp" "$version_script" || {
+			rm -f "$tmp"
+			write_version_diagnostic "FAILED" "Cannot replace setlocalversion"
+			die "cannot update setlocalversion"
+		}
 
-        chmod --reference="$version_script" "$tmp" || {
-            rm -f "$tmp"
-            write_version_diagnostic "FAILED" "Cannot preserve script permissions"
-            die "cannot preserve setlocalversion permissions"
-        }
+		ok "Restored standard printf -dirty detection"
+	else
+		rm -f "$tmp"
+		info "Git dirty detection is already enabled"
+	fi
 
-        mv "$tmp" "$version_script" || {
-            rm -f "$tmp"
-            write_version_diagnostic "FAILED" "Cannot replace setlocalversion"
-            die "cannot update setlocalversion"
-        }
-
-        ok "Restored standard printf -dirty detection"
-
-    else
-        write_version_diagnostic "FAILED" \
-            "Unexpected dirty-check structure: printf=${dirty_count}, colon=${colon_count}"
-        die "unexpected setlocalversion dirty-check structure"
-    fi
-
-    git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$version_script")
-    dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
-    colon_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*:[[:space:]]*$' || true)
-
-    if [ "$dirty_count" -ne 1 ] || [ "$colon_count" -ne 0 ]; then
-        write_version_diagnostic "FAILED" "Dirty marker verification failed"
-        die "Git dirty detection restoration verification failed"
-    fi
-
-    ok "Git dirty detection verified"
+	ok "Git dirty detection verified"
 }
-
 
 # ------------------------------------------------------------- defconfig ---
 
