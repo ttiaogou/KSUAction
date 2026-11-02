@@ -65,7 +65,7 @@ export_env() {
 # summary <markdown...> -- append to the run's job summary (no-op locally).
 summary() {
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -w "${GITHUB_STEP_SUMMARY}" ]; then
-		printf '%s\n' "$*" >>"$GITHUB_STEP_SUMMARY"
+		printf '%s\n' "$*" >>"${GITHUB_STEP_SUMMARY}"
 	fi
 }
 
@@ -103,13 +103,119 @@ retry() {
 
 # ------------------------------------------------------------- downloading ---
 
-# fetch URL DEST -- resumable, retrying download.
+# archive_format_from_path PATH -- identify a supported archive format.
+archive_format_from_path() {
+	local path=${1%%\?*}
+
+	case "$path" in
+		*.tar.gz | *.tgz) printf 'tar.gz' ;;
+		*.tar.xz)         printf 'tar.xz' ;;
+		*.tar.zst)        printf 'tar.zst' ;;
+		*.tar.bz2)        printf 'tar.bz2' ;;
+		*.tar)            printf 'tar' ;;
+		*.zip)            printf 'zip' ;;
+		*)                printf 'raw' ;;
+	esac
+}
+
+# validate_download FILE FORMAT -- validate the complete archive without extracting it.
+validate_download() {
+	local file=$1 format=${2:-raw}
+
+	case "$format" in
+		tar.gz | tgz)
+			gzip -t "$file" && tar -tzf "$file" >/dev/null
+			;;
+		tar.xz)
+			xz -t "$file" && tar -tJf "$file" >/dev/null
+			;;
+		tar.zst)
+			zstd -t "$file" && tar --zstd -tf "$file" >/dev/null
+			;;
+		tar.bz2)
+			bzip2 -t "$file" && tar -tjf "$file" >/dev/null
+			;;
+		tar)
+			tar -tf "$file" >/dev/null
+			;;
+		zip)
+			unzip -tq "$file" >/dev/null
+			;;
+		raw)
+			[ -s "$file" ]
+			;;
+		*)
+			printf 'unsupported download validation format: %s\n' "$format" >&2
+			return 2
+			;;
+	esac
+}
+
+# fetch URL DEST [FORMAT] -- download to a temporary file, validate it, then publish it.
+# A failed download or integrity check counts as one attempt. Three failed attempts
+# stop the build; incomplete files never replace the destination file.
 fetch() {
-	local url=$1 dest=$2
+	local url=$1 dest=$2 format=${3:-}
+	local tmp validation_log attempt=1 max_attempts=3
+	local delay=5 curl_status detail
+
+	if [ -z "$format" ] || [ "$format" = raw ]; then
+		format=$(archive_format_from_path "$dest")
+		if [ "$format" = raw ]; then
+			format=$(archive_format_from_path "$url")
+		fi
+	fi
+	format=${format:-raw}
+
+	mkdir -p "$(dirname "$dest")"
+
+	tmp="${dest}.part.$$"
+	validation_log="${tmp}.validation.log"
+
 	info "fetching ${url}"
-	retry 4 curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 3 -o "$dest" "$url" \
-		|| die "failed to download ${url}"
-	[ -s "$dest" ] || die "downloaded file is empty: ${url}"
+	info "download validation format: ${format}"
+
+	while (( attempt <= max_attempts )); do
+		rm -f "$tmp" "$validation_log"
+
+		# One curl invocation per outer attempt keeps the retry limit at exactly three.
+		if curl -fsSL --connect-timeout 30 -o "$tmp" "$url"; then
+			if [ -s "$tmp" ] && validate_download "$tmp" "$format" 2>"$validation_log"; then
+				mv -f "$tmp" "$dest" || {
+					rm -f "$tmp" "$validation_log"
+					die "cannot move verified download into place: ${dest}"
+				}
+
+				rm -f "$validation_log"
+				ok "download verified: ${dest}"
+				return 0
+			fi
+
+			if [ -s "$tmp" ]; then
+				detail=$(tail -n 3 "$validation_log" 2>/dev/null | tr '\n' ' ')
+				warn "download integrity validation failed (attempt ${attempt}/${max_attempts})"
+				[ -n "$detail" ] && warn "validation detail: ${detail}" || true
+			else
+				warn "downloaded file is empty (attempt ${attempt}/${max_attempts})"
+			fi
+		else
+			curl_status=$?
+			warn "download command failed with curl exit code ${curl_status} (attempt ${attempt}/${max_attempts})"
+		fi
+
+		rm -f "$tmp"
+
+		if [ "$attempt" -ge "$max_attempts" ]; then
+			rm -f "$validation_log"
+			die "failed to download and validate ${format} file after ${max_attempts} attempts: ${url}"
+		fi
+
+		warn "discarding invalid download; retrying in ${delay}s"
+		sleep "$delay"
+		attempt=$((attempt + 1))
+		delay=$((delay * 2))
+		[ "$delay" -gt 60 ] && delay=60
+	done
 }
 
 # fetch_stdout URL -- print a URL's body, retrying. Used for small text files.
@@ -155,7 +261,7 @@ ref_exists() {
 	return 1
 }
 
-# ------------------------------------------------------------- Kconfig I/O ---
+# ------------------------------------------------------------ Kconfig I/O ---
 #
 # The original workflow manipulated defconfigs with a pile of one-off `sed`
 # expressions, which double-set options and cannot represent "turn this off".
@@ -213,7 +319,7 @@ apply_patch() {
 		return 0
 	fi
 	# Last resort: let patch do its fuzzy best, but only after proving that the
-	# entire patch applies.  Applying first and checking the exit code leaves
+	# entire patch applies. Applying first and checking the exit code leaves
 	# successfully matched hunks in the tree when a later hunk rejects; callers
 	# then run their fallback against a half-patched (and often uncompilable)
 	# source file.
