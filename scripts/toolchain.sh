@@ -86,7 +86,7 @@ setup_clang() {
 		fi
 
 		fetch "${AOSP_CLANG_BASE}/+archive/refs/heads/${branch}/clang-${version}.tar.gz" \
-			"${WORKSPACE}/clang.tar.gz"
+			"${WORKSPACE}/clang.tar.gz" tar.gz
 		extract_archive "${WORKSPACE}/clang.tar.gz" "$CLANG_DIR"
 	fi
 
@@ -119,7 +119,7 @@ setup_gcc() {
 		group "Downloading AOSP GCC (arm64)"
 		mkdir -p "$GCC64_DIR"
 		fetch "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/${gcc_tag}.tar.gz" \
-			"${WORKSPACE}/gcc-aarch64.tar.gz"
+			"${WORKSPACE}/gcc-aarch64.tar.gz" tar.gz
 		extract_archive "${WORKSPACE}/gcc-aarch64.tar.gz" "$GCC64_DIR"
 		export_env GCC_64 "CROSS_COMPILE=${GCC64_DIR}/bin/aarch64-linux-android-"
 		endgroup
@@ -134,7 +134,7 @@ setup_gcc() {
 		group "Downloading AOSP GCC (arm32)"
 		mkdir -p "$GCC32_DIR"
 		fetch "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/${gcc_tag}.tar.gz" \
-			"${WORKSPACE}/gcc-arm.tar.gz"
+			"${WORKSPACE}/gcc-arm.tar.gz" tar.gz
 		extract_archive "${WORKSPACE}/gcc-arm.tar.gz" "$GCC32_DIR"
 		export_env GCC_32 "CROSS_COMPILE_ARM32=${GCC32_DIR}/bin/arm-linux-androideabi-"
 		endgroup
