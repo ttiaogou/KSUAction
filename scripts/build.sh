@@ -339,25 +339,25 @@ create_local_source_snapshot() {
 
     tracked_status=$(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no)
 
-    if [ -n "$tracked_status" ]; then
-        write_version_diagnostic "FAILED" "Tracked kernel files remain modified after snapshot"
-        die "kernel tracked working tree is not clean after snapshot"
-    fi
+	if [ -n "$tracked_status" ]; then
+		write_version_diagnostic "FAILED" "Tracked kernel files remain modified after snapshot"
+		die "kernel tracked working tree is not clean after snapshot"
+	fi
 
-    snapshot=$(git -C "$KERNEL_DIR" rev-parse HEAD)
+	snapshot=$(git -C "$KERNEL_DIR" rev-parse HEAD)
 
-    export_env KERNEL_SOURCE_BUILD_COMMIT "$snapshot"
+	export_env KERNEL_SOURCE_BUILD_COMMIT "$snapshot"
 
-    write_version_diagnostic "SNAPSHOT_READY" "none" "not-calculated"
+	write_version_diagnostic "SNAPSHOT_READY" "none" "not-calculated"
 
-    ok "Original kernel commit: ${base_head}"
-    ok "Local build snapshot: ${snapshot}"
-    ok "Tracked kernel working tree is clean"
+	ok "Original kernel commit: ${base_head}"
+	ok "Local build snapshot: ${snapshot}"
+	ok "Tracked kernel working tree is clean"
 
-    summary "| Original kernel commit | \`${base_head}\` |"
-    summary "| Local build snapshot | \`${snapshot}\` |"
+	summary "| Original kernel commit | \`${base_head}\` |"
+	summary "| Local build snapshot | \`${snapshot}\` |"
 
-    endgroup
+	endgroup
 }
 
 
@@ -400,10 +400,10 @@ verify_kernel_release() {
 
     write_version_diagnostic "PREBUILD_PASS" "none" "$release"
 
-    ok "Kernel release verified: ${release}"
-    summary "| Pre-build kernel release | \`${release}\` |"
+	ok "Kernel release verified: ${release}"
+	summary "| Pre-build kernel release | \`${release}\` |"
 
-    endgroup
+	endgroup
 }
 
 
@@ -426,7 +426,6 @@ build_kernel() {
 	export PATH="${CLANG_PATH:-}:${PATH}"
 	export KBUILD_BUILD_HOST=${KBUILD_BUILD_HOST:-Github-Action}
 	export KBUILD_BUILD_USER=${KBUILD_BUILD_USER:-kernelsu-action}
-
 	# DISABLE_LTO is this action's boolean configuration switch, but several
 	# Android kernel trees use the same Make variable for compiler flags (for
 	# example, "-fno-lto").  Leaving our value in the environment makes a
