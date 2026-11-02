@@ -16,71 +16,181 @@ OUT="${KERNEL_DIR}/out"
 
 DEFCONFIG_PATH="${KERNEL_DIR}/arch/${ARCH}/configs/${KERNEL_CONFIG}"
 
-# ------------------------------------------------------- version suffix ---
-# Disable only the Git dirty marker emitted by this kernel's setlocalversion.
-# The check is source-aware and idempotent: unknown layouts fail closed.
-disable_git_dirty_suffix() {
-	local version_script="${KERNEL_DIR}/scripts/setlocalversion"
-	[ -f "$version_script" ] || die "scripts/setlocalversion not found: ${version_script}"
 
-	local start_count end_count git_block dirty_count disabled_count tmp
+# ------------------------------------------------------- version diagnostics ---
 
-	start_count=$(grep -Fc '# Check for uncommitted changes.' "$version_script" || true)
-	end_count=$(grep -Fc '# All done with git' "$version_script" || true)
+VERSION_DIAGNOSTIC="${WORKSPACE}/kernel-version-diagnostic.txt"
 
-	[ "$start_count" -eq 1 ] && [ "$end_count" -eq 1 ] \
-		|| die "unsupported setlocalversion layout: cannot identify one Git dirty-check block"
+# Write a complete diagnostic report. Safe to call before or after compilation.
+write_version_diagnostic() {
+    local state=${1:-UNKNOWN}
+    local reason=${2:-none}
+    local release=${3:-not-calculated}
+    local file
 
-	git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$version_script")
-	[ -n "$git_block" ] || die "Git dirty-check block is empty in ${version_script}"
+    mkdir -p "$WORKSPACE"
 
-	dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
-	disabled_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*:[[:space:]]*$' || true)
+    {
+        echo "========== Kernel Version Diagnostic =========="
+        printf 'Status: %s\n' "$state"
+        printf 'Reason: %s\n' "$reason"
+        printf 'Calculated Release: %s\n' "$release"
+        echo
 
-	if [ "$dirty_count" -eq 1 ] && [ "$disabled_count" -eq 0 ]; then
-		tmp=$(mktemp "${version_script}.ksuaction.XXXXXX") \
-			|| die "cannot create temporary file beside ${version_script}"
+        printf 'Kernel Source: %s\n' "${KERNEL_SOURCE:-unknown}"
+        printf 'Kernel Branch: %s\n' "${KERNEL_SOURCE_BRANCH:-unknown}"
+        printf 'Kernel Version: %s\n' "${KERNEL_VERSION:-unknown}"
+        printf 'Original Commit: %s\n' "${KERNEL_SOURCE_BASE_COMMIT:-not-captured}"
+        printf 'Build Snapshot Commit: %s\n' "${KERNEL_SOURCE_BUILD_COMMIT:-not-captured}"
+        echo
 
-		if ! awk '
-			/# Check for uncommitted changes\./ { in_git = 1 }
-			in_git && /^[[:space:]]*printf/ && /-dirty/ {
-				sub(/printf.*/, ":")
-				changed++
-			}
-			{ print }
-			/^[[:space:]]*# All done with git/ { in_git = 0 }
-			END { if (changed != 1) exit 1 }
-		' "$version_script" > "$tmp"; then
-			rm -f "$tmp"
-			die "could not uniquely disable Git dirty output in ${version_script}"
-		fi
+        printf 'KernelSU Variant: %s\n' "${KSU_VARIANT:-unknown}"
+        printf 'KernelSU Ref: %s\n' "${KSU_REF_RESOLVED:-${KSU_REF:-unknown}}"
 
-		chmod --reference="$version_script" "$tmp" || {
-			rm -f "$tmp"
-			die "could not preserve permissions for ${version_script}"
-		}
+        if [ -d "${KERNEL_DIR}/${KSU_DIR:-KernelSU}" ]; then
+            printf 'KernelSU Commit: '
+            git -C "${KERNEL_DIR}/${KSU_DIR:-KernelSU}" rev-parse HEAD 2>/dev/null || true
+        fi
 
-		mv "$tmp" "$version_script" || {
-			rm -f "$tmp"
-			die "could not update ${version_script}"
-		}
+        printf 'SUSFS Branch: %s\n' "${SUSFS_BRANCH_RESOLVED:-${SUSFS_BRANCH:-unknown}}"
 
-	elif [ "$dirty_count" -eq 0 ] && [ "$disabled_count" -eq 1 ]; then
-		info "Git dirty suffix is already disabled"
-	else
-		die "unexpected Git dirty-check contents in ${version_script} (dirty lines: ${dirty_count}, disabled lines: ${disabled_count})"
-	fi
+        if [ -d "${WORKSPACE}/susfs4ksu" ]; then
+            printf 'SUSFS Commit: '
+            git -C "${WORKSPACE}/susfs4ksu" rev-parse HEAD 2>/dev/null || true
+        fi
 
-	git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$version_script")
+        echo
+        echo "========== Git Status (Tracked Files) =========="
+        git -C "$KERNEL_DIR" status --short --untracked-files=no 2>&1 || true
 
-	dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
-	disabled_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*:[[:space:]]*$' || true)
+        echo
+        echo "========== Git Status (All Files) =============="
+        git -C "$KERNEL_DIR" status --short --untracked-files=all 2>&1 || true
 
-	[ "$dirty_count" -eq 0 ] && [ "$disabled_count" -eq 1 ] \
-		|| die "Git dirty suffix verification failed for ${version_script}"
+        echo
+        echo "========== Git Diff Statistics ================="
+        git -C "$KERNEL_DIR" diff --stat HEAD 2>&1 || true
 
-	ok "Git -dirty suffix disabled in scripts/setlocalversion"
+        echo
+        echo "========== setlocalversion Dirty Check ========="
+        sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' \
+            "${KERNEL_DIR}/scripts/setlocalversion" 2>/dev/null || true
+
+        echo
+        echo "========== SCMVERSION =========================="
+        if [ -f "${KERNEL_DIR}/.scmversion" ]; then
+            cat "${KERNEL_DIR}/.scmversion"
+        else
+            echo "(absent)"
+        fi
+
+        echo
+        echo "========== LOCALVERSION ========================"
+        printf 'Environment LOCALVERSION: %s\n' "${LOCALVERSION-<unset>}"
+
+        for file in "${KERNEL_DIR}"/localversion* "${OUT}"/localversion*; do
+            [ -f "$file" ] || continue
+            printf '\n--- %s ---\n' "$file"
+            cat "$file"
+        done
+
+        echo
+        echo "========== Kconfig LOCALVERSION ================"
+        grep -E '^CONFIG_LOCALVERSION=|^CONFIG_LOCALVERSION_AUTO=' \
+            "${OUT}/.config" 2>/dev/null || true
+
+        echo
+        echo "========== Final Result ========================"
+        echo "================================================"
+    } > "$VERSION_DIAGNOSTIC"
 }
+
+# Restore the real Git dirty marker.
+# Only the known incorrect placeholder ':' is repaired automatically.
+restore_git_dirty_detection() {
+    local version_script="${KERNEL_DIR}/scripts/setlocalversion"
+    local start_count end_count git_block
+    local dirty_count colon_count tmp
+
+    [ -f "$version_script" ] || {
+        write_version_diagnostic "FAILED" "setlocalversion missing"
+        die "scripts/setlocalversion not found"
+    }
+
+    start_count=$(grep -Fc '# Check for uncommitted changes.' "$version_script" || true)
+    end_count=$(grep -Fc '# All done with git' "$version_script" || true)
+
+    if [ "$start_count" -ne 1 ] || [ "$end_count" -ne 1 ]; then
+        write_version_diagnostic "FAILED" "Unknown setlocalversion layout"
+        die "unsupported setlocalversion layout"
+    fi
+
+    git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$version_script")
+
+    dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
+    colon_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*:[[:space:]]*$' || true)
+
+    if [ "$dirty_count" -eq 1 ] && [ "$colon_count" -eq 0 ]; then
+        info "Git dirty detection is already enabled"
+
+    elif [ "$dirty_count" -eq 0 ] && [ "$colon_count" -eq 1 ]; then
+        info "Found disabled Git dirty detection; restoring it"
+
+        tmp=$(mktemp "${version_script}.ksuaction.XXXXXX") || {
+            write_version_diagnostic "FAILED" "Cannot create temporary setlocalversion"
+            die "cannot create temporary version script"
+        }
+
+        if ! awk '
+            /# Check for uncommitted changes\./ { in_git = 1 }
+            in_git && /^[[:space:]]*:[[:space:]]*$/ {
+                indent = $0
+                sub(/[^[:space:]].*$/, "", indent)
+                print indent "printf '\''%s'\'' -dirty"
+                changed++
+                next
+            }
+            { print }
+            /^[[:space:]]*# All done with git/ { in_git = 0 }
+            END { if (changed != 1) exit 1 }
+        ' "$version_script" > "$tmp"; then
+            rm -f "$tmp"
+            write_version_diagnostic "FAILED" "Cannot restore Git dirty marker"
+            die "failed to restore Git dirty detection"
+        fi
+
+        chmod --reference="$version_script" "$tmp" || {
+            rm -f "$tmp"
+            write_version_diagnostic "FAILED" "Cannot preserve script permissions"
+            die "cannot preserve setlocalversion permissions"
+        }
+
+        mv "$tmp" "$version_script" || {
+            rm -f "$tmp"
+            write_version_diagnostic "FAILED" "Cannot replace setlocalversion"
+            die "cannot update setlocalversion"
+        }
+
+        ok "Restored standard printf -dirty detection"
+
+    else
+        write_version_diagnostic "FAILED" \
+            "Unexpected dirty-check structure: printf=${dirty_count}, colon=${colon_count}"
+        die "unexpected setlocalversion dirty-check structure"
+    fi
+
+    git_block=$(sed -n '/# Check for uncommitted changes\./,/^[[:space:]]*# All done with git/p' "$version_script")
+    dirty_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*printf.*-dirty' || true)
+    colon_count=$(printf '%s\n' "$git_block" | grep -Ec '^[[:space:]]*:[[:space:]]*$' || true)
+
+    if [ "$dirty_count" -ne 1 ] || [ "$colon_count" -ne 0 ]; then
+        write_version_diagnostic "FAILED" "Dirty marker verification failed"
+        die "Git dirty detection restoration verification failed"
+    fi
+
+    ok "Git dirty detection verified"
+}
+
 
 # ------------------------------------------------------------- defconfig ---
 
