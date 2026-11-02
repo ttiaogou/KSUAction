@@ -258,7 +258,7 @@ prepare_defconfig() {
 	fi
 
 	# Restore the real Git dirty detection instead of suppressing it.
-restore_git_dirty_detection
+	restore_git_dirty_detection
 
 	info "defconfig changes:"
 	diff -u "${WORKSPACE}/defconfig.orig" "$DEFCONFIG_PATH" | sed -n '4,$p' | sed 's/^/    /' || true
@@ -272,6 +272,7 @@ create_local_source_snapshot() {
     group "Creating local kernel source snapshot"
 
     local base_head snapshot ksu_dir path tracked_status
+    local actual_target expected_target
 
     base_head=$(git -C "$KERNEL_DIR" rev-parse HEAD 2>/dev/null) || {
         write_version_diagnostic "FAILED" "Cannot read kernel HEAD"
@@ -318,6 +319,32 @@ create_local_source_snapshot() {
         case "$path" in
             "$ksu_dir" | "$ksu_dir/"*)
                 ;;
+
+            drivers/kernelsu)
+                # Allow only the expected KernelSU symlink.
+                [ -L "${KERNEL_DIR}/drivers/kernelsu" ] || {
+                    write_version_diagnostic "FAILED" "KernelSU link is not a symlink"
+                    die "invalid drivers/kernelsu path"
+                }
+
+                actual_target=$(readlink -f "${KERNEL_DIR}/drivers/kernelsu") || {
+                    write_version_diagnostic "FAILED" "Cannot resolve KernelSU symlink"
+                    die "cannot resolve drivers/kernelsu"
+                }
+
+                expected_target=$(readlink -f "${KERNEL_DIR}/${ksu_dir}/kernel") || {
+                    write_version_diagnostic "FAILED" "Cannot resolve KernelSU kernel directory"
+                    die "cannot resolve expected KernelSU kernel directory"
+                }
+
+                [ -n "$actual_target" ] &&
+                [ -n "$expected_target" ] &&
+                [ "$actual_target" = "$expected_target" ] || {
+                    write_version_diagnostic "FAILED" "KernelSU symlink target mismatch"
+                    die "drivers/kernelsu points to an unexpected location"
+                }
+                ;;
+
             *)
                 write_version_diagnostic "FAILED" "Unexpected untracked kernel path: ${path}"
                 die "unexpected untracked source file: ${path}"
@@ -448,18 +475,21 @@ build_kernel() {
 		info "ccache enabled (dir: ${CCACHE_DIR})"
 	fi
 
-cd "$KERNEL_DIR"
+	cd "$KERNEL_DIR"
 
-# Snapshot all source integration changes before Kbuild starts.
-create_local_source_snapshot
+	# Snapshot all source integration changes before Kbuild starts.
+	create_local_source_snapshot
 
-info "make ${args} ${KERNEL_CONFIG}"
+	info "make ${args} ${KERNEL_CONFIG}"
+	# shellcheck disable=SC2086
+	make -j"$(nproc --all)" CC=clang $args "${KERNEL_CONFIG}" || {
+		write_version_diagnostic "FAILED" \
+			"defconfig generation failed" "${KERNEL_RELEASE:-not-calculated}"
+		die "defconfig generation failed"
+	}
 
-make -j"$(nproc --all)" CC=clang $args "${KERNEL_CONFIG}" \
-    || die "defconfig generation failed"
-
-# Calculate and verify the actual kernel release before compilation.
-verify_kernel_release
+	# Calculate and verify the actual kernel release before compilation.
+	verify_kernel_release
 	group "Final SUSFS configuration"
 
 	if [ -f "${OUT}/.config" ]; then
@@ -476,8 +506,11 @@ verify_kernel_release
 
 	info "make ${args}"
 	# shellcheck disable=SC2086
-	make -j"$(nproc --all)" CC="$cc" $args \
-		|| die "kernel build failed"
+	make -j"$(nproc --all)" CC="$cc" $args || {
+		write_version_diagnostic "FAILED" \
+			"kernel build failed" "${KERNEL_RELEASE:-not-calculated}"
+		die "kernel build failed"
+	}
 
 	endgroup
 }
@@ -489,9 +522,12 @@ check_output() {
 	local boot="${OUT}/arch/${ARCH}/boot"
 	local image="${boot}/${KERNEL_IMAGE_NAME}"
 
-	[ -f "$image" ] || die "expected kernel image not found: ${image}
+	[ -f "$image" ] || {
+		write_version_diagnostic "FAILED" "expected kernel image not found: ${image}"
+		die "expected kernel image not found: ${image}
        Built files: $(ls "$boot" 2>/dev/null | tr '\n' ' ')
        Check that KERNEL_IMAGE_NAME matches what your kernel produces."
+	}
 
 	ok "kernel image: ${KERNEL_IMAGE_NAME} ($(du -h "$image" | cut -f1))"
 	export_env CHECK_FILE_IS_OK true
@@ -509,33 +545,36 @@ check_output() {
 	fi
 
 	# Record and verify the release string actually compiled into the kernel.
-if [ -f "${OUT}/include/generated/utsrelease.h" ]; then
-    local rel
+	if [ -f "${OUT}/include/generated/utsrelease.h" ]; then
+		local rel
 
-    rel=$(sed -nE 's/.*UTS_RELEASE[[:space:]]+"([^"]+)".*/\1/p' \
-        "${OUT}/include/generated/utsrelease.h")
+		rel=$(sed -nE 's/.*UTS_RELEASE[[:space:]]+"([^"]+)".*/\1/p' \
+			"${OUT}/include/generated/utsrelease.h")
 
-    if [[ "$rel" == *-dirty* ]]; then
-        write_version_diagnostic "FAILED" \
-            "Final UTS_RELEASE contains -dirty" "$rel"
+		if [[ "$rel" == *-dirty* ]]; then
+			write_version_diagnostic "FAILED" \
+				"Final UTS_RELEASE contains -dirty" "$rel"
 
-        die "compiled kernel contains unexpected -dirty suffix"
-    fi
+			die "compiled kernel contains unexpected -dirty suffix"
+		fi
 
-    if [ -n "${KERNEL_RELEASE:-}" ] && [ "$rel" != "$KERNEL_RELEASE" ]; then
-        write_version_diagnostic "FAILED" \
-            "Pre-build and final kernel release mismatch" "$rel"
+		if [ -n "${KERNEL_RELEASE:-}" ] && [ "$rel" != "$KERNEL_RELEASE" ]; then
+			write_version_diagnostic "FAILED" \
+				"Pre-build and final kernel release mismatch" "$rel"
 
-        die "final kernel release differs from pre-build verification"
-    fi
+			die "final kernel release differs from pre-build verification"
+		fi
 
-    export_env KERNEL_RELEASE "$rel"
+		export_env KERNEL_RELEASE "$rel"
 
-    write_version_diagnostic "PASS" "none" "$rel"
+		write_version_diagnostic "PASS" "none" "$rel"
 
-    ok "kernel release: ${rel}"
-    summary "| Kernel release | \`${rel}\` |"
-fi
+		ok "kernel release: ${rel}"
+		summary "| Kernel release | \`${rel}\` |"
+	else
+		write_version_diagnostic "FAILED" "Final UTS_RELEASE header not found: ${OUT}/include/generated/utsrelease.h"
+		die "final kernel UTS_RELEASE header not found"
+	fi
 	endgroup
 }
 
