@@ -202,6 +202,15 @@ jobs:
       - name: Build kernel
         run: bash scripts/build.sh all
 
+      - name: Upload kernel version diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-version-diagnostic-${{ env.DEVICE }}-${{ matrix.config }}-${{ env.BUILD_TIME }}
+          path: kernel_workspace/kernel-version-diagnostic.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Package artifacts
         run: bash scripts/package.sh all
 
